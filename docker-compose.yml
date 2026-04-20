@@ -1,0 +1,42 @@
+version: '3.8'
+
+# PostgreSQL для всех задач
+#
+# Запуск: docker compose up -d
+# Логи:   docker compose logs -f postgres
+# psql:   docker compose exec postgres psql -U postgres
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    command:
+      - postgres
+      # Включаем логирование всех запросов (удобно при отладке)
+      - -c
+      - log_statement=all
+      # Логировать медленные запросы (>100ms)
+      - -c
+      - log_min_duration_statement=100
+      # Для задач по изоляции: видеть deadlock'и
+      - -c
+      - deadlock_timeout=1s
+      - -c
+      - log_lock_waits=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
