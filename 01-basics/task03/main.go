@@ -51,16 +51,16 @@ import (
 	"os"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jmoiron/sqlx"
 )
 
 type UserRow struct {
-	ID        int64      `db:"id"`
-	Name      string     `db:"name"`
-	Email     string     `db:"email"`
-	Age       *int       `db:"age"`
-	CreatedAt time.Time  `db:"created_at"`
+	ID        int64     `db:"id"`
+	Name      string    `db:"name"`
+	Email     string    `db:"email"`
+	Age       *int      `db:"age"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 type UserInput struct {
@@ -73,14 +73,16 @@ func dsn() string {
 	if v := os.Getenv("POSTGRES_DSN"); v != "" {
 		return v
 	}
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable"
 }
 
 func connect(ctx context.Context) (*sqlx.DB, error) {
+	// sqlx.Open(драйвер, DSN) — драйвер "pgx" зарегистрирован в database/sql
 	db, err := sqlx.Open("pgx", dsn())
 	if err != nil {
 		return nil, err
 	}
+	// Проверяем, что БД реально доступна
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -90,43 +92,57 @@ func connect(ctx context.Context) (*sqlx.DB, error) {
 
 // TODO: реализуй GetUserByID - GetContext + struct scan
 func GetUserByID(ctx context.Context, db *sqlx.DB, id int64) (*UserRow, error) {
-	// var u UserRow
-	// err := db.GetContext(ctx, &u, "SELECT id, name, email, age, created_at FROM users WHERE id = $1", id)
-	// if errors.Is(err, sql.ErrNoRows) { return nil, nil }
-	// if err != nil { return nil, err }
-	// return &u, nil
-	_ = errors.Is
-	_ = sql.ErrNoRows
-	return nil, nil
+	var u UserRow
+	// db.GetContext = QueryRow + автоматический Scan в структуру
+	err := db.GetContext(ctx, &u, "SELECT id, name, email, age, created_at FROM users WHERE id = $1", id)
+	// sql.ErrNoRows — специальная ошибка, если запрос не вернул строк
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 // TODO: реализуй ListUsersByIDs - sqlx.In + Rebind + SelectContext
 func ListUsersByIDs(ctx context.Context, db *sqlx.DB, ids []int64) ([]UserRow, error) {
+	// Защита от пустого слайса (иначе ошибка SQL)
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	// query, args, err := sqlx.In("SELECT id, name, email, age, created_at FROM users WHERE id IN (?) ORDER BY id", ids)
-	// if err != nil { return nil, err }
-	// query = db.Rebind(query)  // ? → $1, $2, ...
-	//
-	// var users []UserRow
-	// err = db.SelectContext(ctx, &users, query, args...)
-	// return users, err
-	return nil, nil
+	// sqlx.In заменяет ? в запросе на ($1, $2, $3, ...)
+	query, args, err := sqlx.In("SELECT id, name, email, age, created_at FROM users WHERE id IN (?) ORDER BY id", ids)
+	if err != nil {
+		return nil, err
+	}
+	// db.Rebind переводит ? в $1, $2 для PostgreSQL
+	query = db.Rebind(query) // ? → $1, $2, ...
+
+	var users []UserRow
+	// SelectContext = Query + автоматический Scan для множества строк
+	err = db.SelectContext(ctx, &users, query, args...)
+	return users, err
 }
 
 // TODO: реализуй CreateUserNamed - NamedQueryContext
 func CreateUserNamed(ctx context.Context, db *sqlx.DB, input UserInput) (int64, error) {
-	// rows, err := db.NamedQueryContext(ctx,
-	//     "INSERT INTO users (name, email, age) VALUES (:name, :email, :age) RETURNING id",
-	//     input,
-	// )
-	// if err != nil { return 0, err }
-	// defer rows.Close()
-	// if !rows.Next() { return 0, fmt.Errorf("no rows returned") }
-	// var id int64
-	// return id, rows.Scan(&id)
-	return 0, nil
+	// NamedQueryContext позволяет использовать имена полей структуры в запросе
+	rows, err := db.NamedQueryContext(ctx,
+		"INSERT INTO users (name, email, age) VALUES (:name, :email, :age) RETURNING id",
+		input,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close() // Важно: закрываем rows, чтобы освободить ресурсы
+	// rows.Next() — есть ли результат?
+	if !rows.Next() {
+		return 0, fmt.Errorf("no rows returned")
+	}
+	var id int64
+	// Сканируем RETURNING id в переменную
+	return id, rows.Scan(&id)
 }
 
 func main() {
@@ -136,7 +152,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect: %v\nЗапусти: docker compose up -d", err)
 	}
-	defer db.Close()
+	defer db.Close() // Гарантированно закроем соединение при выходе
 
 	// CREATE через named query
 	id, err := CreateUserNamed(ctx, db, UserInput{
