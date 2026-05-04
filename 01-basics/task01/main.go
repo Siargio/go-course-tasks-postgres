@@ -64,34 +64,35 @@ func DSN() string {
 		return dsn
 	}
 	// Дефолтные значения совпадают с docker-compose.yml
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable"
 }
 
 // TODO: реализуй Connect - создаёт пул соединений
 func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	// Подсказка:
-	// pool, err := pgxpool.New(ctx, dsn)
-	// if err != nil { return nil, fmt.Errorf("pgxpool.New: %w", err) }
-	// if err := pool.Ping(ctx); err != nil {
-	//     pool.Close()
-	//     return nil, fmt.Errorf("ping: %w", err)
-	// }
-	// return pool, nil
-	return nil, nil
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("pgxpool.New: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping: %w", err)
+	}
+	return pool, nil
 }
 
 // TODO: реализуй ConnectWithConfig - пул с кастомными настройками
 func ConnectWithConfig(ctx context.Context, dsn string, maxConns int32) (*pgxpool.Pool, error) {
 	// Подсказка:
-	// cfg, err := pgxpool.ParseConfig(dsn)
-	// if err != nil { return nil, err }
-	// cfg.MaxConns = maxConns
-	// cfg.MinConns = 2
-	// cfg.MaxConnLifetime = 30 * time.Minute
-	// cfg.MaxConnIdleTime = 5 * time.Minute
-	// return pgxpool.NewWithConfig(ctx, cfg)
-	_ = time.Minute
-	return nil, nil
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = maxConns
+	cfg.MinConns = 2
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	return pgxpool.NewWithConfig(ctx, cfg)
 }
 
 func main() {
