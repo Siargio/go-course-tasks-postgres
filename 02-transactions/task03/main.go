@@ -62,17 +62,15 @@ func dsn() string {
 	if v := os.Getenv("POSTGRES_DSN"); v != "" {
 		return v
 	}
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable"
 }
 
 // TODO: реализуй IsRetryable - проверка что ошибка требует retry
 func IsRetryable(err error) bool {
-	// var pgErr *pgconn.PgError
-	// if errors.As(err, &pgErr) {
-	//     return pgErr.Code == pgSerializationFailure || pgErr.Code == pgDeadlockDetected
-	// }
-	// return false
-	_ = pgConn(err)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == pgSerializationFailure || pgErr.Code == pgDeadlockDetected
+	}
 	return false
 }
 
@@ -84,30 +82,31 @@ func pgConn(err error) *pgconn.PgError {
 
 // TODO: реализуй RunWithRetry - выполнение транзакции с повтором
 func RunWithRetry(ctx context.Context, pool *pgxpool.Pool, maxAttempts int, fn func(tx pgx.Tx) error) error {
-	// for attempt := 1; attempt <= maxAttempts; attempt++ {
-	//     tx, err := pool.BeginTx(ctx, pgx.TxOptions{
-	//         IsoLevel: pgx.Serializable,
-	//     })
-	//     if err != nil { return err }
-	//
-	//     err = fn(tx)
-	//     if err != nil {
-	//         tx.Rollback(ctx)
-	//         if IsRetryable(err) && attempt < maxAttempts {
-	//             continue  // повторяем
-	//         }
-	//         return err
-	//     }
-	//     if err := tx.Commit(ctx); err != nil {
-	//         if IsRetryable(err) && attempt < maxAttempts {
-	//             continue
-	//         }
-	//         return err
-	//     }
-	//     return nil
-	// }
-	// return fmt.Errorf("exceeded %d retry attempts", maxAttempts)
-	return nil
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		tx, err := pool.BeginTx(ctx, pgx.TxOptions{
+			IsoLevel: pgx.Serializable,
+		})
+		if err != nil {
+			return err
+		}
+
+		err = fn(tx)
+		if err != nil {
+			tx.Rollback(ctx)
+			if IsRetryable(err) && attempt < maxAttempts {
+				continue // повторяем
+			}
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			if IsRetryable(err) && attempt < maxAttempts {
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("exceeded %d retry attempts", maxAttempts)
 }
 
 func main() {
