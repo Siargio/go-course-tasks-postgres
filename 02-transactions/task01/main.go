@@ -62,50 +62,65 @@ func dsn() string {
 	if v := os.Getenv("POSTGRES_DSN"); v != "" {
 		return v
 	}
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable"
 }
 
 // TODO: реализуй Transfer - атомарный перевод средств
 func Transfer(ctx context.Context, pool *pgxpool.Pool, fromID, toID int64, amount float64) error {
 	// Алгоритм:
-	//
-	// tx, err := pool.Begin(ctx)
-	// if err != nil { return err }
-	// defer tx.Rollback(ctx)  // ← идиома: если Commit не вызван → откатить
-	//
-	// // Блокируем строки в ОДНОМ порядке (min(fromID, toID) first) - защита от deadlock!
-	// var balance float64
-	// err = tx.QueryRow(ctx,
-	//     "SELECT balance FROM accounts WHERE id = $1 FOR UPDATE", fromID,
-	// ).Scan(&balance)
-	// if err != nil { return err }
-	//
-	// if balance < amount {
-	//     return ErrInsufficientFunds
-	// }
-	//
-	// _, err = tx.Exec(ctx,
-	//     "UPDATE accounts SET balance = balance - $1 WHERE id = $2", amount, fromID)
-	// if err != nil { return err }
-	//
-	// _, err = tx.Exec(ctx,
-	//     "UPDATE accounts SET balance = balance + $1 WHERE id = $2", amount, toID)
-	// if err != nil { return err }
-	//
-	// return tx.Commit(ctx)
-	return nil
+	// Начинаем транзакцию
+	// Begin(ctx) получает соединение из пула и начинает транзакцию
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	// Идиома Go: отложенный откат
+	// Если будет вызван tx.Commit() — Rollback проигнорируется
+	// Если выйдем по ошибке — Rollback откатит изменения
+	defer tx.Rollback(ctx)
+
+	// Блокируем строки в ОДНОМ порядке (min(fromID, toID) first) - защита от deadlock!
+	var balance float64
+	err = tx.QueryRow(ctx,
+		"SELECT balance FROM accounts WHERE id = $1 FOR UPDATE", fromID,
+	).Scan(&balance)
+	if err != nil {
+		return err // Транзакция откатится через defer Rollback
+	}
+	// Проверяем, достаточно ли денег на счёте
+	if balance < amount {
+		return ErrInsufficientFunds // Откатываем транзакцию
+	}
+	// UPDATE с вычислением: новый_баланс = старый_баланс - amount
+	// Exec — выполнение запроса без возврата строк
+	_, err = tx.Exec(ctx,
+		"UPDATE accounts SET balance = balance - $1 WHERE id = $2", amount, fromID)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		"UPDATE accounts SET balance = balance + $1 WHERE id = $2", amount, toID)
+	if err != nil {
+		return err
+	}
+	// Commit — применяем все изменения
+	// Если ошибка — defer Rollback откатит всё
+	return tx.Commit(ctx)
 }
 
 // TODO: реализуй GetBalance
 func GetBalance(ctx context.Context, pool *pgxpool.Pool, id int64) (float64, error) {
-	// var balance float64
-	// err := pool.QueryRow(ctx, "SELECT balance FROM accounts WHERE id = $1", id).Scan(&balance)
-	// return balance, err
-	return 0, nil
+	var balance float64
+	// QueryRow — запрос, возвращающий одну строку
+	err := pool.QueryRow(ctx, "SELECT balance FROM accounts WHERE id = $1", id).Scan(&balance)
+	// Если пользователь не найден — вернёт ошибку sql.ErrNoRows
+	return balance, err
 }
 
 func setupAccounts(ctx context.Context, pool *pgxpool.Pool) (int64, int64, error) {
 	var aliceID, bobID int64
+	// INSERT ... RETURNING id — вставляет и сразу возвращает id
 	err := pool.QueryRow(ctx,
 		"INSERT INTO accounts (owner, balance) VALUES ('Alice', 1000) RETURNING id",
 	).Scan(&aliceID)
