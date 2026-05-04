@@ -73,68 +73,72 @@ func dsn() string {
 	if v := os.Getenv("POSTGRES_DSN"); v != "" {
 		return v
 	}
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable"
 }
 
 // TODO: реализуй CreateUser - INSERT RETURNING id
 func CreateUser(ctx context.Context, pool *pgxpool.Pool, name, email string, age int) (int64, error) {
 	// Подсказка:
-	// var id int64
-	// err := pool.QueryRow(ctx,
-	//     "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id",
-	//     name, email, age,
-	// ).Scan(&id)
-	// return id, err
-	return 0, nil
+	var id int64
+	err := pool.QueryRow(ctx,
+		"INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id",
+		name, email, age,
+	).Scan(&id)
+	return id, err
 }
 
 // TODO: реализуй GetUser - SELECT WHERE id
 func GetUser(ctx context.Context, pool *pgxpool.Pool, id int64) (*User, error) {
 	// Подсказка:
-	// u := &User{}
-	// err := pool.QueryRow(ctx,
-	//     "SELECT id, name, email, age, created_at FROM users WHERE id = $1", id,
-	// ).Scan(&u.ID, &u.Name, &u.Email, &u.Age, &u.CreatedAt)
-	// if errors.Is(err, pgx.ErrNoRows) { return nil, nil }  // не найден - не ошибка
-	// if err != nil { return nil, err }
-	// return u, nil
-	_ = errors.Is
-	_ = pgx.ErrNoRows
-	return nil, nil
+	u := &User{}
+	err := pool.QueryRow(ctx,
+		"SELECT id, name, email, age, created_at FROM users WHERE id = $1", id,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.Age, &u.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	} // не найден - не ошибка
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
 }
 
 // TODO: реализуй UpdateUser - UPDATE users SET name
 func UpdateUser(ctx context.Context, pool *pgxpool.Pool, id int64, name string) error {
 	// Подсказка:
-	// tag, err := pool.Exec(ctx, "UPDATE users SET name = $1 WHERE id = $2", name, id)
-	// if err != nil { return err }
-	// if tag.RowsAffected() == 0 { return fmt.Errorf("user %d not found", id) }
-	// return nil
+	tag, err := pool.Exec(ctx, "UPDATE users SET name = $1 WHERE id = $2", name, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user %d not found", id)
+	}
 	return nil
 }
 
 // TODO: реализуй DeleteUser - DELETE FROM users
 func DeleteUser(ctx context.Context, pool *pgxpool.Pool, id int64) error {
-	// pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id)
-	return nil
+	_, err := pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id)
+	return err
 }
 
 // TODO: реализуй ListUsers - SELECT * ORDER BY id
 func ListUsers(ctx context.Context, pool *pgxpool.Pool) ([]User, error) {
-	// rows, err := pool.Query(ctx, "SELECT id, name, email, age, created_at FROM users ORDER BY id")
-	// if err != nil { return nil, err }
-	// defer rows.Close()
-	//
-	// var users []User
-	// for rows.Next() {
-	//     var u User
-	//     if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Age, &u.CreatedAt); err != nil {
-	//         return nil, err
-	//     }
-	//     users = append(users, u)
-	// }
-	// return users, rows.Err()
-	return nil, nil
+	rows, err := pool.Query(ctx, "SELECT id, name, email, age, created_at FROM users ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Age, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 func main() {
