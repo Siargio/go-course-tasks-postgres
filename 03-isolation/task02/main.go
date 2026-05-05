@@ -54,40 +54,44 @@ func dsn() string {
 	if v := os.Getenv("POSTGRES_DSN"); v != "" {
 		return v
 	}
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://dev:dev@localhost:5433/devdb?sslmode=disable"
 }
 
 // TODO: реализуй CountActive - COUNT(*) WHERE quantity > 0
 func CountActive(ctx context.Context, tx pgx.Tx) (int, error) {
-	// var count int
-	// err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM inventory WHERE quantity > 0").Scan(&count)
-	// return count, err
-	return 0, nil
+	var count int
+	err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM inventory WHERE quantity > 0").Scan(&count)
+	return count, err
+
 }
 
 // TODO: реализуй InsertProduct
 func InsertProduct(ctx context.Context, pool *pgxpool.Pool, product string, quantity int) error {
-	// _, err := pool.Exec(ctx, "INSERT INTO inventory (product, quantity) VALUES ($1, $2)", product, quantity)
-	// return err
-	return nil
+	_, err := pool.Exec(ctx, "INSERT INTO inventory (product, quantity) VALUES ($1, $2)", product, quantity)
+	return err
 }
 
 // TODO: реализуй ReadTwiceWithInsertBetween
 func ReadTwiceWithInsertBetween(ctx context.Context, pool *pgxpool.Pool, isoLevel pgx.TxIsoLevel, insertBetween func()) (first, second int, err error) {
-	// tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: isoLevel})
-	// if err != nil { return 0, 0, err }
-	// defer tx.Rollback(ctx)
-	//
-	// first, err = CountActive(ctx, tx)
-	// if err != nil { return 0, 0, err }
-	//
-	// insertBetween()
-	//
-	// second, err = CountActive(ctx, tx)
-	// if err != nil { return 0, 0, err }
-	//
-	// return first, second, nil
-	return 0, 0, nil
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: isoLevel})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	first, err = CountActive(ctx, tx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	insertBetween()
+
+	second, err = CountActive(ctx, tx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return first, second, nil
 }
 
 func main() {
@@ -97,6 +101,17 @@ func main() {
 		log.Fatalf("connect: %v", err)
 	}
 	defer pool.Close()
+
+	_, err = pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS inventory (
+			id BIGSERIAL PRIMARY KEY,
+			product TEXT NOT NULL UNIQUE,
+			quantity INT NOT NULL DEFAULT 0
+		)
+	`)
+	if err != nil {
+		log.Fatalf("create table: %v", err)
+	}
 
 	// Подготовка: 3 товара
 	pool.Exec(ctx, "DELETE FROM inventory WHERE product LIKE 'phantom-%'")
