@@ -54,31 +54,37 @@ func dsn() string {
 	if v := os.Getenv("POSTGRES_DSN"); v != "" {
 		return v
 	}
-	return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+	return "postgres://dev:dev@localhost:5433/devdb?sslmode=disable"
 }
 
 // TODO: реализуй ReadTwiceReadCommitted
 func ReadTwiceReadCommitted(ctx context.Context, pool *pgxpool.Pool, name string, updateBetween func()) (first, second int, err error) {
-	// tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	// if err != nil { return 0, 0, err }
-	// defer tx.Rollback(ctx)
-	//
-	// tx.QueryRow(ctx, "SELECT value FROM counters WHERE name = $1", name).Scan(&first)
-	// updateBetween()  // другая горутина/транзакция меняет значение
-	// tx.QueryRow(ctx, "SELECT value FROM counters WHERE name = $1", name).Scan(&second)
-	// // При READ COMMITTED: first != second (видим новое закоммиченное значение)
-	// return first, second, nil
-	_ = pgx.ReadCommitted
-	return 0, 0, nil
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	tx.QueryRow(ctx, "SELECT value FROM counters WHERE name = $1", name).Scan(&first)
+	updateBetween() // другая горутина/транзакция меняет значение
+	tx.QueryRow(ctx, "SELECT value FROM counters WHERE name = $1", name).Scan(&second)
+	// При READ COMMITTED: first != second (видим новое закоммиченное значение)
+	return first, second, nil
 }
 
 // TODO: реализуй ReadTwiceRepeatableRead
 func ReadTwiceRepeatableRead(ctx context.Context, pool *pgxpool.Pool, name string, updateBetween func()) (first, second int, err error) {
-	// tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
-	// ...
-	// // При REPEATABLE READ: first == second (снимок зафиксирован в BEGIN)
-	_ = pgx.RepeatableRead
-	return 0, 0, nil
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	tx.QueryRow(ctx, "SELECT value FROM counters WHERE name = $1", name).Scan(&first)
+	updateBetween()
+	tx.QueryRow(ctx, "SELECT value FROM counters WHERE name = $1", name).Scan(&second)
+	// При REPEATABLE READ: first == second (снимок зафиксирован в BEGIN)
+	return first, second, nil
 }
 
 func main() {
@@ -99,6 +105,16 @@ func main() {
 	update := func() {
 		pool.Exec(ctx, "UPDATE counters SET value = 200 WHERE name = $1", name)
 	}
+
+	// Подготовка: вставляем тестовые данные
+	_, err = pool.Exec(ctx, `
+    INSERT INTO counters (name, value) VALUES ('iso-test', 100) 
+    ON CONFLICT (name) DO UPDATE SET value = 100
+`)
+	if err != nil {
+		log.Fatalf("insert failed: %v", err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM counters WHERE name = 'iso-test'")
 
 	// READ COMMITTED - non-repeatable read
 	fmt.Println("=== READ COMMITTED ===")
